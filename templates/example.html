@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Chat Room</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/particles.js/2.0.0/particles.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+      background: black;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      height: 100vh;
+      position: relative;
+    }
+    #particles-js {
+      position: absolute; width: 100%; height: 100%; z-index: -1;
+    }
+    .chat-container {
+      width: 90%; max-width: 800px;
+      background: rgba(0,0,0,0.8);
+      border-radius: 15px; padding: 20px;
+      color: white; font-size: 16px;
+      overflow-y: auto; height: 70vh;
+      margin-bottom: 15px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .message {
+      margin-bottom: 15px;
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.1);
+      position: relative;
+    }
+    .message .menu {
+      position: absolute; right: 8px; top: 8px;
+      cursor: pointer; display: none;
+      font-weight: bold;
+    }
+    .message:hover .menu { display: inline-block; }
+    .reply-preview {
+      background: rgba(255,255,255,0.1);
+      border-left: 3px solid #00ff00;
+      padding: 4px 8px;
+      margin-bottom: 5px;
+      font-size: 14px;
+      color: #ccc;
+    }
+    .message.system {
+      background: rgba(255,165,0,0.2);
+      color: #ffa500; text-align: center;
+      font-style: italic;
+    }
+    .message .username { font-weight: bold; color: #00ff00; margin-right: 8px; }
+    .message .timestamp { font-size: 12px; color: #888; margin-left: 8px; }
+    .chat-input {
+      display: flex; width: 90%; max-width: 800px;
+      margin-bottom: 20px; gap: 10px; position: relative;
+    }
+    input {
+      flex: 1; padding: 12px; font-size: 16px;
+      border-radius: 8px; border: 2px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.1); color: white;
+      outline: none;
+    }
+    input::placeholder { color: rgba(255,255,255,0.6); }
+    input:focus { border-color: #00ff00; }
+    button {
+      padding: 12px 20px; font-size: 16px;
+      border-radius: 8px;
+      background: linear-gradient(45deg,#00ff00,#00cc00);
+      color: black; border: none; cursor: pointer;
+      font-weight: bold; transition: transform 0.2s;
+    }
+    button:hover { transform: scale(1.05); }
+    button:active { transform: scale(0.95); }
+    .emoji-btn {
+      background: #333; border: none; color: white;
+      font-size: 20px; border-radius: 8px;
+      cursor: pointer; padding: 0 12px;
+    }
+    .emoji-picker {
+      position: absolute; bottom: 70px; left: 0;
+      background: #222; border-radius: 10px;
+      padding: 10px; display: none;
+      flex-wrap: wrap; gap: 8px;
+      max-width: 250px;
+    }
+    .emoji-picker span { cursor: pointer; font-size: 22px; }
+    .user-list {
+      position: absolute; top: 20px; right: 20px;
+      background: rgba(0,0,0,0.8);
+      padding: 15px; border-radius: 10px;
+      color: white; max-width: 200px;
+    }
+    .user-list h3 { margin-bottom: 10px; color: #00ff00; }
+    .user-list ul { list-style: none; }
+    .user-list li {
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .typing-indicator {
+      color: #888; font-style: italic;
+      margin-top: 10px; font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div id="particles-js"></div>
+  <div class="user-list" id="userList">
+    <h3>Online Users</h3>
+    <ul id="users"></ul>
+  </div>
+  <div class="chat-container" id="chatbox"></div>
+  <div class="chat-input">
+    <button class="emoji-btn" onclick="toggleEmojiPicker()">😊</button>
+    <input type="text" id="message" placeholder="Type a message..." onkeypress="handleKeyPress(event)">
+    <button onclick="sendMessage()">Send</button>
+    <div class="emoji-picker" id="emojiPicker"></div>
+  </div>
+
+  <script>
+    const socket = io();
+    let username = '';
+    let isUsernameSet = false;
+    let typingTimeout;
+    let replyTo = null;
+
+    const emojis = ["😀","😁","😂","🤣","😊","😍","😎","😭","😡","👍","👎","🙏","🔥","🎉","❤️"];
+    function initEmojiPicker() {
+      const picker = document.getElementById("emojiPicker");
+      emojis.forEach(e => {
+        const span = document.createElement("span");
+        span.textContent = e;
+        span.onclick = () => {
+          document.getElementById("message").value += e;
+          picker.style.display = "none";
+        };
+        picker.appendChild(span);
+      });
+    }
+    function toggleEmojiPicker() {
+      const picker = document.getElementById("emojiPicker");
+      picker.style.display = picker.style.display === "flex" ? "none" : "flex";
+    }
+
+    function addMessage(username, message, timestamp, reply=null) {
+      const chatbox = document.getElementById('chatbox');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message';
+
+      if (reply) {
+        const replyDiv = document.createElement("div");
+        replyDiv.className = "reply-preview";
+        replyDiv.textContent = `Replying to ${reply.username}: ${reply.message}`;
+        messageDiv.appendChild(replyDiv);
+      }
+      messageDiv.innerHTML += `
+        <span class="username">${username}:</span>
+        ${message}
+        <span class="timestamp">${timestamp}</span>
+        <span class="menu">⋮</span>
+      `;
+      const menu = messageDiv.querySelector(".menu");
+      menu.onclick = () => {
+        replyTo = { username, message };
+        const msgBox = document.getElementById("message");
+        msgBox.placeholder = `Replying to ${username}: ${message}`;
+        msgBox.focus();
+      };
+      chatbox.appendChild(messageDiv);
+      chatbox.scrollTop = chatbox.scrollHeight;
+    }
+    function addSystemMessage(message) {
+      const chatbox = document.getElementById('chatbox');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message system';
+      messageDiv.textContent = message;
+      chatbox.appendChild(messageDiv);
+      chatbox.scrollTop = chatbox.scrollHeight;
+    }
+    function sendMessage() {
+      const messageInput = document.getElementById('message');
+      const message = messageInput.value.trim();
+      if (message !== '') {
+        socket.emit('send_message', { message: message, reply: replyTo });
+        messageInput.value = '';
+        messageInput.placeholder = 'Type a message...';
+        replyTo = null;
+      }
+    }
+    function handleKeyPress(event) {
+      if (event.key === 'Enter') {
+        sendMessage();
+      } else {
+        socket.emit('typing', { typing: true });
+        clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(() => {
+          socket.emit('typing', { typing: false });
+        }, 1000);
+      }
+    }
+
+    socket.on('connect', () => {
+      if (!isUsernameSet) {
+        username = prompt("Enter your username:") || 'Anonymous';
+        socket.emit('set_username', { username });
+        isUsernameSet = true;
+      }
+    });
+    socket.on('connection_response', data => console.log(data.message));
+    socket.on('username_set', data => console.log("Username set to:", data.username));
+    socket.on('new_message', data => {
+      addMessage(data.username, data.message, data.timestamp, data.reply || null);
+    });
+    socket.on('user_joined', data => addSystemMessage(data.message));
+    socket.on('user_left', data => addSystemMessage(data.message));
+    socket.on('update_users', data => {
+      const usersList = document.getElementById('users');
+      usersList.innerHTML = '';
+      data.users.forEach(user => {
+        const li = document.createElement('li');
+        li.textContent = user;
+        usersList.appendChild(li);
+      });
+    });
+    socket.on('user_typing', data => {
+      let indicator = document.getElementById('typing-indicator');
+      if (data.typing) {
+        if (!indicator) {
+          indicator = document.createElement('div');
+          indicator.id = 'typing-indicator';
+          indicator.className = 'typing-indicator';
+          document.getElementById('chatbox').appendChild(indicator);
+        }
+        indicator.textContent = `${data.username} is typing...`;
+      } else {
+        if (indicator) indicator.remove();
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      initEmojiPicker();
+      document.getElementById('message').focus();
+      addSystemMessage("Welcome to the chat room!");
+    });
+  </script>
+</body>
+</html>
